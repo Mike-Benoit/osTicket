@@ -1578,6 +1578,9 @@ implements RestrictedAccess, Threadable {
                     'user_id' => $message->getUserId(),
                     'thread_id' => $this->getThreadId()));
 
+	$signal_info = array('staff' => $staff);
+	Signal::send('ticket.message', $this, $signal_info );
+
         /**********   double check auto-response  ************/
         if (!$user)
             $autorespond = false;
@@ -1976,6 +1979,9 @@ implements RestrictedAccess, Threadable {
         $this->logEvent('overdue');
         $this->onOverdue($whine);
 
+	$signal_info = array();
+	Signal::send('ticket.overdue', $this, $signal_info );
+
         return true;
     }
 
@@ -2056,6 +2062,9 @@ implements RestrictedAccess, Threadable {
                     array('note' => $comments, 'title' => $title),
                     $_errors, $thisstaff, false);
         }
+
+	$signal_info = array('dept' => $dept);
+	Signal::send('ticket.transfer', $this, $signal_info );
 
         //Send out alerts if enabled AND requested
         if (!$alert || !$cfg->alertONTransfer())
@@ -2153,6 +2162,9 @@ implements RestrictedAccess, Threadable {
 
         $this->logEvent('assigned', $data);
 
+	$signal_info = array('agent' => $staff);
+	Signal::send('ticket.assign', $this, $signal_info );
+
         return true;
     }
 
@@ -2220,6 +2232,9 @@ implements RestrictedAccess, Threadable {
         $this->logEvent('assigned', $evd);
 
         $this->onAssign($assignee, $form->getComments(), $alert);
+
+	$signal_info = array('staff' => $assignee);
+	Signal::send('ticket.assign', $this, $signal_info );
 
         return true;
     }
@@ -2520,6 +2535,9 @@ implements RestrictedAccess, Threadable {
         $this->lastrespondent = $response->staff;
 
         $this->onResponse($response, array('assignee' => $assignee)); //do house cleaning..
+
+//	$signal_info = array('assignee' => $assignee);
+//	Signal::send('ticket.reply', $this, $signal_info );
 
         /* email the user??  - if disabled - then bail out */
         if (!$alert)
