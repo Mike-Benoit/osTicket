@@ -1738,6 +1738,9 @@ implements RestrictedAccess, Threadable, Searchable {
                     'user_id' => $message->getUserId(),
                     'thread_id' => $this->getThreadId()));
 
+	$signal_info = array('staff' => $staff);
+	Signal::send('ticket.message', $this, $signal_info );
+
         /**********   double check auto-response  ************/
         if (!$user)
             $autorespond = false;
@@ -2246,6 +2249,9 @@ implements RestrictedAccess, Threadable, Searchable {
         $this->logEvent('overdue');
         $this->onOverdue($whine);
 
+	$signal_info = array();
+	Signal::send('ticket.overdue', $this, $signal_info );
+
         return true;
     }
 
@@ -2329,6 +2335,9 @@ implements RestrictedAccess, Threadable, Searchable {
 
         if ($form->refer() && $cdept)
             $this->thread->refer($cdept);
+
+	$signal_info = array('dept' => $dept);
+	Signal::send('ticket.transfer', $this, $signal_info );
 
         //Send out alerts if enabled AND requested
         if (!$alert || !$cfg->alertONTransfer())
@@ -2426,6 +2435,9 @@ implements RestrictedAccess, Threadable, Searchable {
 
         $this->logEvent('assigned', $data);
 
+	$signal_info = array('agent' => $staff);
+	Signal::send('ticket.assign', $this, $signal_info );
+
         return true;
     }
 
@@ -2501,6 +2513,9 @@ implements RestrictedAccess, Threadable, Searchable {
 
         if ($refer && $form->refer())
             $this->thread->refer($refer);
+
+	$signal_info = array('staff' => $assignee);
+	Signal::send('ticket.assign', $this, $signal_info );
 
         return true;
     }
@@ -2984,6 +2999,9 @@ implements RestrictedAccess, Threadable, Searchable {
         $this->lastrespondent = $response->staff;
 
         $this->onResponse($response, array('assignee' => $assignee)); //do house cleaning..
+
+//	$signal_info = array('assignee' => $assignee);
+//	Signal::send('ticket.reply', $this, $signal_info );
 
         /* email the user??  - if disabled - then bail out */
         if (!$alert)
