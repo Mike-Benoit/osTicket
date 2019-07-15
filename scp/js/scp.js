@@ -1080,7 +1080,7 @@ if ($.support.pjax) {
     if (!$this.hasClass('no-pjax')
         && !$this.closest('.no-pjax').length
         && $this.attr('href').charAt(0) != '#')
-      $.pjax.click(event, {container: $this.data('pjaxContainer') || $('#pjax-container'), timeout: 2000});
+      $.pjax.click(event, {container: $this.data('pjaxContainer') || '#pjax-container', timeout: 2000});
   })
 }
 
@@ -1116,15 +1116,16 @@ $(document).on('change', 'select[data-quick-add]', function() {
 });
 
 // Quick note interface
-$(document).on('click.note', '.quicknote .action.edit-note', function() {
+$(document).on('click.note', '.quicknote .action.edit-note', function(e) {
+    // Prevent Auto-Scroll to top of page
+    e.preventDefault();
     var note = $(this).closest('.quicknote'),
         body = note.find('.body'),
         T = $('<textarea>').text(body.html());
     if (note.closest('.dialog, .tip_box').length)
         T.addClass('no-bar small');
     body.replaceWith(T);
-    $.redact(T);
-    $(T).redactor('focus.setStart');
+    $.redact(T, { focusEnd: true });
     note.find('.action.edit-note').hide();
     note.find('.action.save-note').show();
     note.find('.action.cancel-edit').show();
@@ -1197,8 +1198,7 @@ $(document).on('click', '#new-note', function() {
     note.replaceWith(T);
     $('<p>').addClass('submit').css('text-align', 'center')
         .append(button).appendTo(T.parent());
-    $.redact(T);
-    $(T).redactor('focus.setStart');
+    $.redact(T, { focusEnd: true });
     return false;
 });
 
@@ -1248,3 +1248,27 @@ window.relativeAdjust = setInterval(function() {
   });
 }, 20000);
 
+// Add 'afterShow' event to jQuery elements,
+// thanks http://stackoverflow.com/a/1225238/1025836
+jQuery(function($) {
+    var _oldShow = $.fn.show;
+
+    // This should work with jQuery 3 with or without jQuery UI
+    $.fn.show = function() {
+        var argsArray = Array.prototype.slice.call(arguments),
+            arg = argsArray[0],
+            options = {};
+        if (typeof(arg) === 'number')
+            options.duration = arg;
+        else
+            options.effect = arg;
+        return this.each(function () {
+            var obj = $(this);
+            _oldShow.call(obj, $.extend(options, {
+                complete: function() {
+                    obj.trigger('afterShow');
+                }
+            }));
+        });
+    }
+});
