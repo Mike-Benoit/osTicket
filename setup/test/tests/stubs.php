@@ -98,6 +98,10 @@ class DateTimeZone {
     static function listIdentifiers() {}
 }
 
+class DateTimeImmutable {
+    function createFromMutable() {}
+}
+
 class Phar {
     static function isValidPharFilename() {}
     function setStub() {}
@@ -235,6 +239,15 @@ class mPDF {
 class HashPassword {
     function CheckPassword() {}
     function HashPassword() {}
+}
+
+class SplFileObject {
+    function fseek() {}
+}
+
+class AuditEntry {
+    function getDataById() {}
+    function getTableInfo() {}
 }
 
 ?>

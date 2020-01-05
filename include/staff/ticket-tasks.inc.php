@@ -40,12 +40,17 @@ $showing = $pageNav->showing().' '._N('task', 'tasks', $count);
             print __('Add New Task'); ?></a>
     <?php
     }
+    foreach ($tasks as $task)
+        $taskStatus .= $task->isOpen() ? 'open' : 'closed';
+
     if ($count)
         Task::getAgentActions($thisstaff, array(
                     'container' => '#tasks_content',
                     'callback_url' => sprintf('ajax.php/tickets/%d/tasks',
                         $ticket->getId()),
-                    'morelabel' => __('Options')));
+                    'morelabel' => __('Options'),
+                    'status' => $taskStatus ? $taskStatus : '')
+                );
     ?>
 </div>
 <div class="clear"></div>
@@ -159,7 +164,7 @@ $(function() {
             var url = 'ajax.php/'+$(this).attr('href').substr(1);
             var $container = $('div#task_content');
             var $stop = $('ul#ticket_tabs').offset().top;
-            $.pjax({url: url, container: $container, push: false, scrollTo: $stop})
+            $.pjax({url: url, container: 'div#task_content', push: false, scrollTo: $stop})
             .done(
                 function() {
                 $container.show();
@@ -190,7 +195,7 @@ $(function() {
                 $container.load(url+'/'+tid+'/view', function () {
                     $('.tip_box').remove();
                     $('div#tasks_content').hide();
-                    $.pjax({url: url, container: '#tasks_content', push: false});
+                    $.pjax({url: url, container: '#tasks_content', timeout: 30000, push: false});
                 }).show();
             } else {
                 window.location.href = $redirect ? $redirect : window.location.href;

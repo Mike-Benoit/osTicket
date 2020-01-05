@@ -1,4 +1,7 @@
-<?php header("X-Frame-Options: SAMEORIGIN"); ?>
+<?php
+if ($cfg)
+    header("Content-Security-Policy: frame-ancestors ".$cfg->getAllowIframes().";");
+?>
 <!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01 Transitional//EN"
     "http://www.w3.org/TR/html4/loose.dtd">
 <html <?php
@@ -25,7 +28,7 @@ if (($lang = Internationalization::getCurrentLanguage())
                    foreach($wizard['menu'] as $k=>$v)
                     echo sprintf('<a target="_blank" href="%s">%s</a> &mdash; ',$v,$k);
                    ?>
-                    <a target="_blank" href="http://osticket.com/contact-us"><?php echo __('Contact Us');?></a>
+                    <a target="_blank" href="https://osticket.com/contact-us"><?php echo __('Contact Us');?></a>
                 </li>
             </ul>
             <div class="flags">

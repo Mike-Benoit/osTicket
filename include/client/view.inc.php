@@ -3,6 +3,9 @@ if(!defined('OSTCLIENTINC') || !$thisclient || !$ticket || !$ticket->checkUserAc
 
 $info=($_POST && $errors)?Format::htmlchars($_POST):array();
 
+$type = array('type' => 'viewed');
+Signal::send('object.view', $ticket, $type);
+
 $dept = $ticket->getDept();
 
 if ($ticket->isClosed() && !$ticket->isReopenable())
@@ -99,7 +102,7 @@ if ($thisclient && $thisclient->isGuest()
         <td colspan="2">
 <!-- Custom Data -->
 <?php
-$sections = array();
+$sections = $forms = array();
 foreach (DynamicFormEntry::forTicket($ticket->getId()) as $i=>$form) {
     // Skip core fields shown earlier in the ticket view
     $answers = $form->getAnswers()->exclude(Q::any(array(
@@ -112,11 +115,13 @@ foreach (DynamicFormEntry::forTicket($ticket->getId()) as $i=>$form) {
         if ($v = $a->display())
             $sections[$i][$j] = array($v, $a);
     }
+    // Set form titles
+    $forms[$i] = $form->getTitle();
 }
 foreach ($sections as $i=>$answers) {
     ?>
         <table class="custom-data" cellspacing="0" cellpadding="4" width="100%" border="0">
-        <tr><td colspan="2" class="headline flush-left"><?php echo $form->getTitle(); ?></th></tr>
+        <tr><td colspan="2" class="headline flush-left"><?php echo $forms[$i]; ?></th></tr>
 <?php foreach ($answers as $A) {
     list($v, $a) = $A; ?>
         <tr>
@@ -143,6 +148,9 @@ echo $v;
                     'mode' => Thread::MODE_CLIENT,
                     'html-id' => 'ticketThread')
                 );
+if ($blockReply = $ticket->isChild() && $ticket->getMergeType() != 'visual')
+    $warn = sprintf(__('This Ticket is Merged into another Ticket. Please go to the %s%d%s to reply.'),
+        '<a href="tickets.php?id=', $ticket->getPid(), '" style="text-decoration:underline">Parent</a>');
   ?>
 
 <div class="clear" style="padding-bottom:10px;"></div>
@@ -153,8 +161,7 @@ echo $v;
 <?php }elseif($warn) { ?>
     <div id="msg_warning"><?php echo $warn; ?></div>
 <?php }
-
-if (!$ticket->isClosed() || $ticket->isReopenable()) { ?>
+if ((!$ticket->isClosed() || $ticket->isReopenable()) && !$blockReply) { ?>
 <form id="reply" action="tickets.php?id=<?php echo $ticket->getId();
 ?>#reply" name="reply" method="post" enctype="multipart/form-data">
     <?php csrf_token(); ?>

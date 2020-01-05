@@ -58,25 +58,21 @@ implements EmailContact, ITicketUser, TemplateVariable {
         switch (strtolower($tag)) {
         case 'ticket_link':
             $qstr = array();
+            $ticket = $this->getTicket();
             if ($cfg && $cfg->isAuthTokenEnabled()
-                    && ($ticket=$this->getTicket())) {
-                      if (!$ticket->getThread()->getNumCollaborators()) {
-                          $qstr['auth'] = $ticket->getAuthToken($this);
-                          return sprintf('%s/view.php?%s',
-                               $cfg->getBaseUrl(),
-                               Http::build_query($qstr, false)
-                               );
-                      }
-                      else {
-                          return sprintf('%s/tickets.php?id=%s',
-                               $cfg->getBaseUrl(),
-                               $ticket->getId()
-                               );
-                      }
-                    }
-
-
-
+                    && $ticket
+                    && !$ticket->getNumCollaborators()) {
+                $qstr['auth'] = $ticket->getAuthToken($this);
+                return sprintf('%s/view.php?%s',
+                        $cfg->getBaseUrl(),
+                        Http::build_query($qstr, false)
+                        );
+            } else {
+                return sprintf('%s/tickets.php?id=%s',
+                        $cfg->getBaseUrl(),
+                        $ticket ? $ticket->getId() : 0
+                        );
+            }
             break;
         }
     }
@@ -316,6 +312,13 @@ class EndUser extends BaseAuthenticatedUser {
         return $this->_account;
     }
 
+    function getUser() {
+        if ($this->user === false)
+            $this->user = User::lookup($this->getId());
+
+        return $this->user;
+    }
+
     function getLanguage($flags=false) {
         if ($acct = $this->getAccount())
             return $acct->getLanguage($flags);
@@ -457,7 +460,6 @@ class ClientAccount extends UserAccount {
         if ($errors) return false;
 
         $this->set('timezone', $vars['timezone']);
-        $this->set('dst', isset($vars['dst']) ? 1 : 0);
         // Change language
         $this->set('lang', $vars['lang'] ?: null);
         Internationalization::setCurrentLanguage(null);

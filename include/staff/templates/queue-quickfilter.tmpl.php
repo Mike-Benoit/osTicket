@@ -35,17 +35,26 @@ var query = addSearchParam({'<?php echo $param; ?>': $(event.target).data('value
 $.pjax({
     url: '?' + query,
     timeout: 2000,
-    container: '#pjax-container'});">
-  <ul>
-  <?php foreach ($choices as $k=>$desc) {
-    $selected = isset($quick_filter) && $quick_filter == $k;
-  ?>
-    <li <?php
-    if ($selected) echo 'class="active"';
-    ?>>
-      <a href="#" data-value="<?php echo Format::htmlchars($k); ?>">
-        <?php echo Format::htmlchars($desc); ?></a>
-    </li>
-  <?php } ?>
-  </ul>
+    container: '#pjax-container'});
+return false;">
+<ul <?php if ($choices && count($choices) > 20) echo 'style="height:500px;overflow-x:hidden;overflow-y:scroll;"'; ?>>
+    <?php if ($choices) {
+        foreach ($choices as $k=>$desc) {
+            $selected = isset($quick_filter) && $quick_filter == $k;
+            ?>
+            <li <?php
+            if ($selected) echo 'class="active"';
+            ?>>
+            <a href="#" data-value="<?php echo Format::htmlchars($k); ?>">
+                <?php echo Format::htmlchars($desc); ?></a>
+            </li>
+    <?php }
+    } else { ?>
+        <li>
+        <a href="#" data-value="0">
+            <?php echo __('None'); ?></a>
+        </li>
+    <?php }
+    ?>
+</ul>
 </div>

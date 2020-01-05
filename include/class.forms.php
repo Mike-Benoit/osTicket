@@ -160,6 +160,16 @@ class Form {
         return $this->_clean;
     }
 
+    /*
+     * Process the form input and return clean data.
+     *
+     * It's similar to getClean but forms downstream can use it to return
+     * database ready data.
+     */
+    function process($validate=true) {
+        return $this->getClean($validate);
+    }
+
     function errors($formOnly=false) {
         return ($formOnly) ? $this->_errors['form'] : $this->_errors;
     }
@@ -187,14 +197,14 @@ class Form {
         $this->validators[] = $function;
     }
 
-    function render($staff=true, $title=false, $options=array()) {
-        if ($title)
-            $this->title = $title;
+    function render($options=array()) {
+        if (isset($options['title']))
+            $this->title = $options['title'];
         if (isset($options['instructions']))
             $this->instructions = $options['instructions'];
         $form = $this;
         $template = $options['template'] ?: 'dynamic-form.tmpl.php';
-        if ($staff)
+        if (isset($options['staff']) && $options['staff'])
             include(STAFFINC_DIR . 'templates/' . $template);
         else
             include(CLIENTINC_DIR . 'templates/' . $template);
@@ -457,14 +467,12 @@ implements FormRenderer {
               <fieldset class="field <?php if (!$f->isVisible()) echo 'hidden'; ?>"
                 id="field<?php echo $f->getWidget()->id; ?>"
                 data-field-id="<?php echo $f->get('id'); ?>">
-<?php         if ($label = $f->get('label')) { ?>
+<?php         $label = $f->get('label'); ?>
               <label class="<?php if ($f->isRequired()) echo 'required'; ?>"
                   for="<?php echo $f->getWidget()->id; ?>">
-                  <?php echo Format::htmlchars($label); ?>:
+                  <?php echo $label ? (Format::htmlchars($label).':') : '&nbsp;'; ?>
                 <?php if ($f->isRequired()) { ?>
                 <span class="error">*</span>
-                <?php
-                }?>
               </label>
 <?php         }
               if ($f->get('hint')) { ?>
@@ -655,6 +663,7 @@ class FormField {
         }
         return $this->_clean;
     }
+
     function reset() {
         $this->value = $this->_clean = $this->_widget = null;
     }
@@ -1332,7 +1341,6 @@ class FormField {
     }
 
     function getEditForm($source=null) {
-
         $fields = array(
                 'field' => $this,
                 'comments' => new TextareaField(array(
@@ -1352,9 +1360,9 @@ class FormField {
     }
 
     function getChanges() {
-        $a = $this->to_database($this->getClean());
-        $b = $this->to_database($this->answer ? $this->answer->getValue() : $this->get('default'));
-        return ($a != $b) ? array($b, $a) : false;
+        $new = $this->getValue();
+        $old = $this->answer ? $this->answer->getValue() : $this->get('default');
+        return ($old != $new) ? array($this->to_database($old), $this->to_database($new)) : false;
     }
 
 
@@ -1377,6 +1385,7 @@ class FormField {
         if (!$a->save(true))
             return false;
 
+        $this->_clean = $this->_widget = null;
         return $this->parent->save();
     }
 
@@ -1441,10 +1450,14 @@ class TextboxField extends FormField {
     }
 
     function validateEntry($value) {
+        //check to see if value is the string '0'
+        $value = ($value == '0') ? '&#48' : Format::htmlchars($this->toString($value ?: $this->value));
         parent::validateEntry($value);
         $config = $this->getConfiguration();
         $validators = array(
-            '' =>       null,
+            '' => '',
+            'formula' => array(array('Validator', 'is_formula'),
+                __('Content cannot start with the following characters: = - + @')),
             'email' =>  array(array('Validator', 'is_valid_email'),
                 __('Enter a valid email address')),
             'phone' =>  array(array('Validator', 'is_phone'),
@@ -1466,6 +1479,10 @@ class TextboxField extends FormField {
         }
         if (!$value || !isset($validators[$valid]))
             return;
+        // If no validators are set and not an instanceof AdvancedSearchForm
+        // force formula validation
+        if (!$valid && !($this->getForm() instanceof AdvancedSearchForm))
+            $valid = 'formula';
         $func = $validators[$valid];
         $error = $func[1];
         if ($config['validator-error'])
@@ -1477,6 +1494,10 @@ class TextboxField extends FormField {
 
     function parse($value) {
         return Format::striptags($value);
+    }
+
+    function display($value) {
+        return ($value === '0') ? '&#48;' : Format::htmlchars($this->toString($value ?: $this->value));
     }
 }
 
@@ -1525,13 +1546,16 @@ class TextareaField extends FormField {
 
     function validateEntry($value) {
         parent::validateEntry($value);
+        if (!$value)
+            return;
         $config = $this->getConfiguration();
         $validators = array(
-            '' =>       null,
+            '' =>       array(array('Validator', 'is_formula'),
+                __('Content cannot start with the following characters: = - + @')),
             'choices' => array(
                 function($val) {
                     $val = str_replace('"', '', JsonDataEncoder::encode($val));
-                    $regex = "/^(?! )[A-z0-9 _-]+:{1}[A-z0-9 _-]+$/";
+                    $regex = "/^(?! )[A-z0-9 _-]+:{1}[^\n]+$/";
                     foreach (explode('\r\n', $val) as $v) {
                         if (!preg_match($regex, $v))
                             return false;
@@ -1541,12 +1565,12 @@ class TextareaField extends FormField {
             ),
         );
         // Support configuration forms, as well as GUI-based form fields
-        $valid = $this->get('validator');
-        if (!$valid) {
+        if (!($valid = $this->get('validator')) && isset($config['validator']))
             $valid = $config['validator'];
-        }
-        if (!$value || !isset($validators[$valid]))
+
+        if (!isset($validators[$valid]))
             return;
+
         $func = $validators[$valid];
         $error = $func[1];
         if ($config['validator-error'])
@@ -1671,6 +1695,17 @@ class BooleanField extends FormField {
 
     function toString($value) {
         return ($value) ? __('Yes') : __('No');
+    }
+
+    function getClean($validate=true) {
+        if (!isset($this->_clean)) {
+            $this->_clean = (isset($this->value))
+                ? $this->value : $this->getValue();
+
+            if ($this->isVisible() && $validate)
+                $this->validateEntry($this->_clean);
+        }
+        return $this->_clean;
     }
 
     function getSearchMethods() {
@@ -1891,7 +1926,7 @@ class ChoiceField extends FormField {
                 $choices = explode("\n", $config['choices']);
                 foreach ($choices as $choice) {
                     // Allow choices to be key: value
-                    list($key, $val) = explode(':', $choice);
+                    list($key, $val) = explode(':', $choice, 2);
                     if ($val == null)
                         $val = $key;
                     $this->_choices[trim($key)] = trim($val);
@@ -1976,6 +2011,24 @@ class ChoiceField extends FormField {
     }
 
     function applyQuickFilter($query, $qf_value, $name=false) {
+        global $thisstaff;
+
+        //special assignment quick filters
+        switch (true) {
+            case ($qf_value == 'assigned'):
+            case ($qf_value == '!assigned'):
+                $result = AssigneeChoiceField::getSearchQ($qf_value, $qf_value);
+                return $query->filter($result);
+            case (strpos($qf_value, 's') !== false):
+            case (strpos($qf_value, 't') !== false):
+            case ($qf_value == 'M'):
+            case ($qf_value == 'T'):
+                $value = array($qf_value => $qf_value);
+                $result = AssigneeChoiceField::getSearchQ('includes', $value);
+                return $query->filter($result);
+                break;
+        }
+
         return $query->filter(array(
             $name ?: $this->get('name') => $qf_value,
         ));
@@ -2039,11 +2092,11 @@ class DatetimeField extends FormField {
                 'yd' => __('Yesterday'),
                 'tw' => __('This Week'),
                 'tm' => __('This Month'),
-                'tq' => __('This Quater'),
+                'tq' => __('This Quarter'),
                 'ty' => __('This Year'),
                 'lw' => __('Last Week'),
                 'lm' => __('Last Month'),
-                'lq' => __('Last Quater'),
+                'lq' => __('Last Quarter'),
                 'ly' => __('Last Year'),
         );
         return $period ? $periods[$period] : $periods;
@@ -2155,6 +2208,8 @@ class DatetimeField extends FormField {
     }
 
     function toString($value) {
+        if (is_array($value))
+            return '';
 
         $timestamp = is_int($value) ? $value : (int) strtotime($value);
         if ($timestamp <= 0)
@@ -2229,21 +2284,19 @@ class DatetimeField extends FormField {
         if (!$value || !($datetime = Format::parseDateTime($value)))
             return;
 
-        // Parse value to DateTime object
-        $val = Format::parseDateTime($value);
         // Get configured min/max (if any)
         $min = $this->getMinDateTime();
         $max = $this->getMaxDateTime();
 
-        if (!$val) {
+        if (!$datetime) {
             $this->_errors[] = __('Enter a valid date');
-        } elseif ($min and $val < $min) {
+        } elseif ($min and $datetime < $min) {
             $this->_errors[] = sprintf('%s (%s)',
                     __('Selected date is earlier than permitted'),
                      Format::date($min->getTimestamp(), false, false,
                          $min->getTimezone()->getName() ?: 'UTC')
                      );
-        } elseif ($max and $val > $max) {
+        } elseif ($max and $datetime > $max) {
             $this->_errors[] = sprintf('%s (%s)',
                     __('Selected date is later than permitted'),
                     Format::date($max->getTimestamp(), false, false,
@@ -2305,11 +2358,14 @@ class DatetimeField extends FormField {
             )),
             'between' => array('InlineformField', array(
                 'form' => array(
-                    'left' => new DatetimeField(),
+                    'left' => new DatetimeField($config + array('required' => true)),
                     'text' => new FreeTextField(array(
-                        'configuration' => array('content' => 'and'))
+                        'configuration' => array('content' => __('and')))
                     ),
-                    'right' => new DatetimeField(),
+                    'right' => new DatetimeField($config + array('required' => true)),
+                ),
+                'configuration' => array(
+                    'error' => '',
                 ),
             )),
             'period' => array('ChoiceField', array(
@@ -2364,15 +2420,21 @@ class DatetimeField extends FormField {
         case 'before':
             return new Q(array("{$name}__lt" => $value));
         case 'between':
-            foreach (array('left', 'right') as $side) {
-                $value[$side] = is_int($value[$side])
-                    ? DateTime::createFromFormat('U', !$config['gmt']
-                        ? Misc::gmtime($value[$side]) : $value[$side]) ?: $value[$side]
-                    : $value[$side];
-            }
+            $left = Format::parseDateTime($value['left']);
+            $right = Format::parseDateTime($value['right']);
+            if (!$left || !$right)
+                return null;
+
+            // TODO: allow time selection for between
+            $left = $left->setTime(00, 00, 00);
+            $right = $right->setTime(23, 59, 59);
+            // Convert time to db timezone
+            $dbtz = new DateTimeZone($cfg->getDbTimezone());
+            $left->setTimezone($dbtz);
+            $right->setTimezone($dbtz);
             return new Q(array(
-                "{$name}__gte" => $value['left'],
-                "{$name}__lte" => $value['right'],
+                "{$name}__gte" =>  $left->format('Y-m-d H:i:s'),
+                "{$name}__lte" =>  $right->format('Y-m-d H:i:s'),
             ));
         case 'ndaysago':
             $int = $intervals[$value['int'] ?: 'd'] ?: 'DAY';
@@ -2400,18 +2462,14 @@ class DatetimeField extends FormField {
                 "{$name}__gte" => $now->plus($interval),
             ));
         case 'period':
-            // Get the period range boundaries - timezone doesn't matter
-            $period = Misc::date_range($value, Misc::gmtime('now'));
+            // User's effective timezone
             $tz = new DateTimeZone($cfg->getTimezone());
-            // Get datetime boundaries in user's effective timezone
-            $tz = new DateTimeZone($cfg->getTimezone());
-            $start = new DateTime($period->start->format('Y-m-d H:i:s'),
-                    $tz);
-            $end = new DateTime($period->end->format('Y-m-d H:i:s'), $tz);
+            // Get the period range boundaries in user's tz
+            $period = Misc::date_range($value, Misc::gmtime('now'), $tz);
             // Convert boundaries to db time
             $dbtz = new DateTimeZone($cfg->getDbTimezone());
-            $start->setTimezone($dbtz);
-            $end->setTimezone($dbtz);
+            $start = $period->start->setTimezone($dbtz);
+            $end = $period->end->setTimezone($dbtz);
             // Set the range
             return new Q(array(
                 "{$name}__range" => array(
@@ -2543,6 +2601,24 @@ class DatetimeField extends FormField {
     }
 }
 
+
+/**
+ * TimeField for time selection
+ *
+ */
+class TimeField extends FormField {
+    static $widget = 'TimePickerWidget';
+
+    var $start = null;
+    var $end = null;
+
+    function getTimeZone() {
+        global $cfg;
+        $config = $this->getConfiguration();
+        return new DateTimeZone($config['timezone'] ?: $cfg->getTimezone());
+    }
+}
+
 /**
  * This is kind-of a special field that doesn't have any data. It's used as
  * a field to provide a horizontal section break in the display of a form
@@ -2629,7 +2705,240 @@ class ThreadEntryField extends FormField {
     }
 }
 
+class TopicField extends ChoiceField {
+    var $topics;
+    var $_choices;
+
+    function getTopics() {
+        if (!isset($this->topics))
+            $this->topics = Topic::getHelpTopics(false, false, true);
+
+        return $this->topics;
+    }
+
+    function getTopic($id) {
+        if ($this->getTopics() &&
+                isset($this->topics[$id]))
+            return Topic::lookup($id);
+    }
+
+    function getWidget($widgetClass=false) {
+        $default = $this->get('default');
+        $widget = parent::getWidget($widgetClass);
+        if ($widget->value instanceof Topic)
+            $widget->value = $widget->value->getId();
+        elseif (!isset($widget->value) && $default)
+            $widget->value = $default;
+        return $widget;
+    }
+
+    function hasIdValue() {
+        return true;
+    }
+
+    function getChoices($verbose=false) {
+        if (!isset($this->_choices)) {
+            $this->_choices = $this->getTopics();
+        }
+
+        return $this->_choices;
+    }
+
+    function parse($id) {
+        return $this->to_php(null, $id);
+    }
+
+    function to_php($value, $id=false) {
+        if ($value instanceof Topic)
+            return $value;
+        if (is_array($id)) {
+            reset($id);
+            $id = key($id);
+        }
+        elseif (is_array($value))
+            list($value, $id) = $value;
+        elseif ($id === false)
+            $id = $value;
+
+        return $this->getTopic($id);
+    }
+
+    function to_database($topic) {
+        return ($topic instanceof Topic)
+            ? array($topic->getName(), $topic->getId())
+            : $topic;
+    }
+
+    function display($topic, &$styles=null) {
+        if (!$topic instanceof Topic)
+            return parent::display($topic);
+
+        return Format::htmlchars($topic->getName());
+    }
+
+    function toString($value) {
+        if (!($value instanceof Topic) && is_numeric($value))
+            $value = $this->getTopic($value);
+
+        return ($value instanceof Topic) ? $value->getName() : $value;
+    }
+
+    function whatChanged($before, $after) {
+        return FormField::whatChanged($before, $after);
+    }
+
+    function searchable($value) {
+        return null;
+    }
+
+    function getKeys($value) {
+        return ($value instanceof Topic) ? array($value->getId()) : null;
+    }
+
+    function asVar($value, $id=false) {
+        return $this->to_php($value, $id);
+    }
+
+    function getConfiguration() {
+        global $cfg;
+
+        $config = parent::getConfiguration();
+        if (!isset($config['default']))
+            $config['default'] = $cfg->getDefaultTopicId();
+        return $config;
+    }
+}
+
+class SLAField extends ChoiceField {
+    var $slas;
+    var $_choices;
+
+    function getSLAs() {
+        if (!isset($this->slas))
+            $this->slas = SLA::objects();
+
+        return $this->slas;
+    }
+
+    function getSLA($id) {
+        if ($this->getSLAs() &&
+                ($s=$this->slas->findFirst(array('id' => $id))))
+            return $s;
+
+        return SLA::lookup($id);
+    }
+
+    function getWidget($widgetClass=false) {
+        $default = $this->get('default');
+        $widget = parent::getWidget($widgetClass);
+        if ($widget->value instanceof SLA)
+            $widget->value = $widget->value->getId();
+        elseif (!isset($widget->value) && $default)
+            $widget->value = $default;
+        return $widget;
+    }
+
+    function hasIdValue() {
+        return true;
+    }
+
+    function getChoices($verbose=false) {
+        if (!isset($this->_choices)) {
+            $choices = array();
+            foreach ($this->getSLAs() as $s)
+                $choices[$s->getId()] = $s->getName();
+            $this->_choices = $choices;
+        }
+
+        return $this->_choices;
+    }
+
+    function parse($id) {
+        return $this->to_php(null, $id);
+    }
+
+    function to_php($value, $id=false) {
+        if ($value instanceof SLA)
+            return $value;
+        if (is_array($id)) {
+            reset($id);
+            $id = key($id);
+        }
+        elseif (is_array($value))
+            list($value, $id) = $value;
+        elseif ($id === false)
+            $id = $value;
+
+        return $this->getSLA($id);
+    }
+
+    function to_database($sla) {
+        return ($sla instanceof SLA)
+            ? array($sla->getName(), $sla->getId())
+            : $sla;
+    }
+
+    function display($sla, &$styles=null) {
+        if (!$sla instanceof SLA)
+            return parent::display($sla);
+
+        return Format::htmlchars($sla->getName());
+    }
+
+    function toString($value) {
+        if (!($value instanceof SLA) && is_numeric($value))
+            $value = $this->getSLA($value);
+        return ($value instanceof SLA) ? $value->getName() : $value;
+    }
+
+    function whatChanged($before, $after) {
+        return FormField::whatChanged($before, $after);
+    }
+
+    function searchable($value) {
+        return null;
+    }
+
+    function getKeys($value) {
+        return ($value instanceof SLA) ? array($value->getId()) : null;
+    }
+
+    function asVar($value, $id=false) {
+        return $this->to_php($value, $id);
+    }
+
+    function getConfiguration() {
+        global $cfg;
+
+        $config = parent::getConfiguration();
+        if (!isset($config['default']))
+            $config['default'] = $cfg->getDefaultSLAId();
+        return $config;
+    }
+}
+
 class PriorityField extends ChoiceField {
+
+    var $priorities;
+    var $_choices;
+
+    function getPriorities() {
+        if (!isset($this->priorities))
+            $this->priorities = Priority::objects();
+
+        return $this->priorities;
+    }
+
+    function getPriority($id) {
+
+        if ($this->getPriorities() &&
+                ($p=$this->priorities->findFirst(array('priority_id' =>
+                                                       $id))))
+            return $p;
+
+        return Priority::lookup($id);
+    }
+
     function getWidget($widgetClass=false) {
         $widget = parent::getWidget($widgetClass);
         if ($widget->value instanceof Priority)
@@ -2642,15 +2951,14 @@ class PriorityField extends ChoiceField {
     }
 
     function getChoices($verbose=false) {
-        $sql = 'SELECT priority_id, priority_desc FROM '.PRIORITY_TABLE
-              .' ORDER BY priority_urgency DESC';
-        $choices = array('' => '— '.__('Default').' —');
-        if (!($res = db_query($sql)))
-            return $choices;
+        if (!isset($this->_choices)) {
+            $choices = array();
+            foreach ($this->getPriorities() as $p)
+                $choices[$p->getId()] = $p->getDesc();
+            $this->_choices = $choices;
+        }
 
-        while ($row = db_fetch_row($res))
-            $choices[$row[0]] = $row[1];
-        return $choices;
+        return $this->_choices;
     }
 
     function parse($id) {
@@ -2668,14 +2976,18 @@ class PriorityField extends ChoiceField {
             list($value, $id) = $value;
         elseif ($id === false)
             $id = $value;
-        if ($id)
-            return Priority::lookup($id);
+
+        return $this->getPriority($id);
     }
 
-    function to_database($prio) {
-        return ($prio instanceof Priority)
-            ? array($prio->getDesc(), $prio->getId())
-            : $prio;
+    function to_database($value) {
+        if ($value instanceof Priority)
+            return array($value->getDesc(), $value->getId());
+
+        if (is_array($value))
+            return array(current($value), key($value));
+
+        return $value;
     }
 
     function display($prio, &$styles=null) {
@@ -2711,7 +3023,6 @@ class PriorityField extends ChoiceField {
 
     function getConfigurationOptions() {
         $choices = $this->getChoices();
-        $choices[''] = __('System Default');
         return array(
             'prompt' => new TextboxField(array(
                 'id'=>2, 'label'=>__('Prompt'), 'required'=>false, 'default'=>'',
@@ -2801,8 +3112,8 @@ class TimezoneField extends ChoiceField {
 
 class DepartmentField extends ChoiceField {
     function getWidget($widgetClass=false) {
-        $widget = parent::getWidget($widgetClass);
-        if ($widget->value instanceof Dept)
+        $widget = $this->_widget ?: parent::getWidget($widgetClass);
+        if (is_object($widget->value))
             $widget->value = $widget->value->getId();
         return $widget;
     }
@@ -2860,6 +3171,11 @@ class DepartmentField extends ChoiceField {
         return $this->to_php(null, $id);
     }
 
+    function getValue() {
+         if (($value = parent::getValue()) && ($id=$this->getClean()))
+            return $value[$id];
+     }
+
     function to_php($value, $id=false) {
         if ($id) {
             if (is_array($id)) {
@@ -2878,13 +3194,13 @@ class DepartmentField extends ChoiceField {
 
         if (!is_array($dept)) {
             $choices = $this->getChoices();
-            if (isset($choices[$dept]))
-                $dept = array($choices[$dept], $dept);
-        }
-        if (!$dept)
-            $dept = array();
+            if (in_array($dept, $choices)) {
+                $deptId = array_search($dept, $choices);
+                $dept = array($dept, $deptId);
+            }
+         }
 
-        return $dept;
+        return $dept ?: array();
     }
 
     function toString($value) {
@@ -2927,67 +3243,6 @@ FormField::addFieldTypes(/*@trans*/ 'Dynamic Fields', function() {
     );
 });
 
-
-class SLAField extends ChoiceField {
-    function getWidget($widgetClass=false) {
-        $widget = parent::getWidget($widgetClass);
-        if ($widget->value instanceof SLA)
-            $widget->value = $widget->value->getId();
-        return $widget;
-    }
-
-    function hasIdValue() {
-        return true;
-    }
-
-    function getChoices($verbose=false) {
-        global $cfg;
-
-        $choices = array();
-        if (($depts = SLA::getSLAs()))
-            foreach ($depts as $id => $name)
-                $choices[$id] = $name;
-
-        return $choices;
-    }
-
-    function parse($id) {
-        return $this->to_php(null, $id);
-    }
-
-    function to_php($value, $id=false) {
-        if (is_array($id)) {
-            reset($id);
-            $id = key($id);
-        }
-        return $id;
-    }
-
-    function to_database($sla) {
-        return ($sla instanceof SLA)
-            ? array($sla->getName(), $sla->getId())
-            : $sla;
-    }
-
-    function toString($value) {
-        return (string) $value;
-    }
-
-    function searchable($value) {
-        return null;
-    }
-
-    function getConfigurationOptions() {
-        return array(
-            'prompt' => new TextboxField(array(
-                'id'=>2, 'label'=>__('Prompt'), 'required'=>false, 'default'=>'',
-                'hint'=>__('Leading text shown before a value is selected'),
-                'configuration'=>array('size'=>40, 'length'=>40),
-            )),
-        );
-    }
-}
-
 class AssigneeField extends ChoiceField {
     var $_choices = null;
     var $_criteria = null;
@@ -3016,6 +3271,10 @@ class AssigneeField extends ChoiceField {
 
     function setChoices($choices) {
         $this->_choices = $choices;
+    }
+
+    function display($value) {
+        return $this->getAnswer() ? $this->getAnswer()->value : $value;
     }
 
     function getChoices($verbose=false) {
@@ -3053,9 +3312,12 @@ class AssigneeField extends ChoiceField {
     }
 
     function getValue() {
-
-        if (($value = parent::getValue()) && ($id=$this->getClean()))
-           return $value[$id];
+        if (($value = parent::getValue()) && ($id=$this->getClean())) {
+            $name = (is_object($value[key($value)]) && get_class($value[key($value)]) == 'AgentsName') ?
+                $value[key($value)]->name : $value[key($value)];
+            return array($name, substr(key($value), 1));
+        } else
+            return array();
     }
 
 
@@ -3357,6 +3619,9 @@ class FileUploadField extends FormField {
         $file = array_shift($files);
         $file['name'] = urldecode($file['name']);
 
+        if (!$this->isValidFile($file))
+            Http::response(413, 'Invalid File');
+
         if (!$bypass && !$this->isValidFileType($file['name'], $file['type']))
             Http::response(415, 'File type is not allowed');
 
@@ -3383,6 +3648,9 @@ class FileUploadField extends FormField {
         if (!$this->isValidFileType($file['name'], $file['type']))
             throw new FileUploadError(__('File type is not allowed'));
 
+        if (!$this->isValidFile($file))
+             throw new FileUploadError(__('Invalid File'));
+
         $config = $this->getConfiguration();
         if ($file['size'] > $config['size'])
             throw new FileUploadError(__('File size is too large'));
@@ -3398,9 +3666,11 @@ class FileUploadField extends FormField {
         if (!$this->isValidFileType($file['name'], $file['type']))
             throw new FileUploadError(__('File type is not allowed'));
 
-        if (is_callable($file['data']))
-            $file['data'] = $file['data']();
-        if (!isset($file['size'])) {
+        if (!isset($file['data']) && isset($file['data_cbk'])
+                && is_callable($file['data_cbk']))
+            $file['data'] = $file['data_cbk']();
+
+        if (!isset($file['size']) && isset($file['data'])) {
             // bootstrap.php include a compat version of mb_strlen
             if (extension_loaded('mbstring'))
                 $file['size'] = mb_strlen($file['data'], '8bit');
@@ -3416,6 +3686,18 @@ class FileUploadField extends FormField {
             throw new FileUploadError(__('Unable to save file'));
 
         return $F;
+    }
+
+    function isValidFile($file) {
+
+        // Check invalid image hacks
+        if ($file['tmp_name']
+                && stripos($file['type'], 'image/') === 0
+                && function_exists('exif_imagetype')
+                && !exif_imagetype($file['tmp_name']))
+            return false;
+
+        return true;
     }
 
     function isValidFileType($name, $type=false) {
@@ -3670,7 +3952,9 @@ class InlineFormField extends FormField {
 
     function validateEntry($value) {
         if (!$this->getInlineForm()->isValid()) {
-            $this->_errors[] = __('Correct any errors below and try again.');
+            $config = $this->getConfiguration();
+            $this->_errors[] = isset($config['error'])
+                ? $config['error'] : __('Correct any errors below and try again.');
         }
     }
 
@@ -3804,8 +4088,26 @@ class Widget {
      * (<> == true, where <> is the result of this function). The %s token
      * will be replaced with a jQuery variable representing this widget.
      */
-    function getJsValueGetter() {
-        return '%s.val()';
+    function getJsValueGetter($id='%s') {
+        return sprintf('%s.val()', $id);
+    }
+
+    /**
+     * getJsComparator
+     *
+     * Used with the dependent fields to get comparison expression
+     *
+     */
+    function getJsComparator($value, $id) {
+
+        if (strpos($value, '|') !== false)
+            return sprintf('$.inArray(%s, %s) !== -1',
+                   $this->getJsValueGetter($id),
+                   JsonDataEncoder::encode(explode('|', $value)));
+
+        return sprintf('%s == %s',
+                $this->getJsValueGetter($id),
+                JsonDataEncoder::encode($value));
     }
 }
 
@@ -3973,7 +4275,6 @@ class PhoneNumberWidget extends Widget {
 
 class ChoicesWidget extends Widget {
     function render($options=array()) {
-
         $mode = null;
         if (isset($options['mode']))
             $mode = $options['mode'];
@@ -3981,10 +4282,10 @@ class ChoicesWidget extends Widget {
             $mode = $this->field->options['render_mode'];
 
         if ($mode == 'view') {
-            if (!($val = (string) $this->field))
-                $val = sprintf('<span class="faded">%s</span>', __('None'));
-
-            echo $val;
+            $val = (string) $this->field;
+            echo sprintf('<span id="field_%s" %s >%s</span>', $this->id,
+                    $val ? '': 'class="faded"',
+                    $val ?: __('None'));
             return;
         }
 
@@ -4006,13 +4307,16 @@ class ChoicesWidget extends Widget {
         if (!strcasecmp($mode, 'search')) {
             $def_val = $prompt;
         } else {
+            $showdefault = true;
+            if ($mode != 'create')
+                 $showdefault = false;
             $def_key = $this->field->get('default');
-            if (!$def_key && $config['default'])
+            if (!$def_key && isset($config['default']))
                 $def_key = $config['default'];
             if (is_array($def_key))
                 $def_key = key($def_key);
             $have_def = isset($choices[$def_key]);
-            $def_val = $have_def ? $choices[$def_key] : $prompt;
+            $def_val = ($have_def && !$showdefault) ? $choices[$def_key] : $prompt;
         }
 
         $values = $this->value;
@@ -4036,8 +4340,8 @@ class ChoicesWidget extends Widget {
             data-placeholder="<?php echo $prompt; ?>"
             <?php if ($config['multiselect'])
                 echo ' multiple="multiple"'; ?>>
-            <?php if (!$have_def && !$config['multiselect']) { ?>
-            <option value="<?php echo $def_key; ?>">&mdash; <?php
+            <?php if ($showdefault || (!$have_def && !$config['multiselect'])) { ?>
+            <option value="<?php echo $showdefault ? '' : $def_key; ?>">&mdash; <?php
                 echo $def_val; ?> &mdash;</option>
 <?php
         }
@@ -4062,7 +4366,7 @@ class ChoicesWidget extends Widget {
             return $this->emitComplexChoices($choices, $values, $have_def, $def_key);
 
         foreach ($choices as $key => $name) {
-            if (!$have_def && $key == $def_key)
+            if (!$have_def && $key === $def_key)
                 continue; ?>
             <option value="<?php echo $key; ?>" <?php
                 if (isset($values[$key])) echo 'selected="selected"';
@@ -4123,9 +4427,10 @@ class ChoicesWidget extends Widget {
         return $values;
     }
 
-    function getJsValueGetter() {
-        return '%s.find(":selected").val()';
+    function getJsValueGetter($id='%s') {
+        return sprintf('%s.find(":selected").val()', $id);
     }
+
 }
 
 /**
@@ -4310,16 +4615,25 @@ class CheckboxWidget extends Widget {
     function getValue() {
         $data = $this->field->getSource();
         if (count($data)) {
-            if (!isset($data[$this->name]))
-                return null;
-            return @in_array($this->field->get('id'), $data[$this->name]);
+            if (isset($data[$this->name]))
+                return @in_array($this->field->get('id'),
+                        $data[$this->name]);
+            // initial value set on source
+            if (isset($data[$this->field->get('id')]))
+                return $data[$this->field->get('id')];
         }
+
+        if (isset($this->value))
+            return $this->value;
+
+
         return parent::getValue();
     }
 
-    function getJsValueGetter() {
-        return '%s.is(":checked")';
+    function getJsValueGetter($id='%s') {
+        return sprintf('%s.is(":checked")', $id);
     }
+
 }
 
 class DatetimePickerWidget extends Widget {
@@ -4329,38 +4643,57 @@ class DatetimePickerWidget extends Widget {
 
         $config = $this->field->getConfiguration();
         $timezone = $this->field->getTimezone();
-
+        $dateFormat = $cfg->getDateFormat(true);
+        $timeFormat = $cfg->getTimeFormat(true);
         if (!isset($this->value) && ($default=$this->field->get('default')))
             $this->value = $default;
 
         if ($this->value) {
-
-            if (is_int($this->value))
-                // Assuming UTC timezone.
-                $datetime = DateTime::createFromFormat('U', $this->value);
-            else {
-                $datetime = Format::parseDateTime($this->value);
-            }
-
-            if ($config['time']) {
+            $datetime = Format::parseDateTime($this->value);
+            if ($config['time'])
                 // Convert to user's timezone for update.
                 $datetime->setTimezone($timezone);
+
+            // Get formatted date
+            $this->value = Format::date($datetime->getTimestamp(), false,
+                        false, $timezone ? $timezone->getName() : 'UTC');
+            // Get formatted time
+            if ($config['time']) {
+                 $this->value .=' '.Format::time($datetime->getTimestamp(),
+                         false, $timeFormat, $timezone ?
+                         $timezone->getName() : 'UTC');
             }
 
-            $this->value = Format::date($datetime->getTimestamp(), false,
-                    false, $timezone ? $timezone->getName() : 'UTC');
         } else {
+            // For timezone display purposes
             $datetime = new DateTime('now');
             $datetime->setTimezone($timezone);
         }
         ?>
         <input type="text" name="<?php echo $this->name; ?>"
             id="<?php echo $this->id; ?>" style="display:inline-block;width:auto"
-            value="<?php echo Format::htmlchars($this->value ?: ''); ?>" size="12"
+            value="<?php echo $this->value; ?>"
+            size="<?php $config['time'] ? 20 : 12; ?>"
             autocomplete="off" class="dp" />
+        <?php
+        // Timezone hint
+        // Show timzone hit by default but allow field to turn it off.
+        $showtimezone = true;
+        if (isset($config['showtimezone']))
+            $showtimezone = $config['showtimezone'];
+
+        if ($datetime && $showtimezone) {
+            echo sprintf('&nbsp;<span class="faded">(<a href="#"
+                        data-placement="top" data-toggle="tooltip"
+                        title="%s">%s</a>)</span>',
+                    $datetime->getTimezone()->getName(),
+                    $datetime->format('T'));
+        }
+        ?>
         <script type="text/javascript">
             $(function() {
-                $('input[name="<?php echo $this->name; ?>"]').datepicker({
+                $('input[name="<?php echo $this->name; ?>"]').<?php echo
+                $config['time'] ? 'datetimepicker':'datepicker';?>({
                     <?php
                     if ($dt=$this->field->getMinDateTime())
                         echo sprintf("minDate: new Date(%s),\n", $dt->format('U')*1000);
@@ -4368,28 +4701,29 @@ class DatetimePickerWidget extends Widget {
                         echo sprintf("maxDate: new Date(%s),\n", $dt->format('U')*1000);
                     elseif (!$config['future'])
                         echo "maxDate: new Date().getTime(),\n";
+
+                    // Set time options
+                    if ($config['time']) {
+                        // Set Timezone
+                        echo sprintf("timezone: %s,\n",
+                                ($datetime->getOffset()/60));
+                        echo sprintf("
+                                controlType: 'select',\n
+                                timeInput: true,\n
+                                timeFormat: \"%s\",\n",
+                                Format::dtfmt_php2js($timeFormat));
+                    }
                     ?>
                     numberOfMonths: 2,
                     showButtonPanel: true,
                     buttonImage: './images/cal.png',
                     showOn:'both',
-                    dateFormat: $.translate_format('<?php echo $cfg->getDateFormat(true); ?>')
+                    dateFormat: '<?php echo
+                        Format::dtfmt_php2js($dateFormat); ?>'
                 });
             });
         </script>
         <?php
-        if ($config['time']) {
-            list($hr, $min) = explode(':', $datetime ?
-                    $datetime->format('H:i') : '');
-            // TODO: Add time picker -- requires time picker or selection with
-            //       Misc::timeDropdown
-            echo '&nbsp;' . Misc::timeDropdown($hr, $min, $this->name . ':time');
-            echo sprintf('&nbsp;<span class="faded">(<a href="#"
-                        data-placement="top" data-toggle="tooltip"
-                        title="%s">%s</a>)</span>',
-                    $datetime->getTimezone()->getName(),
-                    $datetime->format('T'));
-        }
     }
 
     /**
@@ -4401,21 +4735,88 @@ class DatetimePickerWidget extends Widget {
         global $cfg;
 
         if ($value = parent::getValue()) {
-            // Effective timezone for the selection
-            $timezone = $this->field->getTimezone();
-            // See if we have time
-            $data = $this->field->getSource();
-            if ($value && isset($data[$this->name . ':time']))
-                $value .=' '.$data[$this->name . ':time'];
-
-            $dt = new DateTime($value, $timezone);
-            $value = $dt->format('Y-m-d H:i:s T');
+            if (($dt = Format::parseDateTime($value))) {
+                // Effective timezone for the selection
+                if (($timezone = $this->field->getTimezone()))
+                    $dt->setTimezone($timezone);
+                // Format date time to universal format
+                $value = $dt->format('Y-m-d H:i:s T');
+            }
         }
 
         return $value;
     }
 }
 
+class TimePickerWidget extends Widget {
+
+    function render($options=array()) {
+        $config = $this->field->getConfiguration();
+        if (!isset($this->value) && ($default=$this->field->get('default')))
+            $this->value = $default;
+
+        // For timezone display purposes only - for now
+        $datetime = new DateTime('now');
+        // Selection timezone
+        $datetime->setTimezone($this->field->getTimeZone());
+
+        if ($this->value) {
+            // TODO: Reformat time here to match settings
+        }
+
+        ?>
+        <input type="text" name="<?php echo $this->name; ?>"
+            id="<?php echo $this->id; ?>" style="display:inline-block;width:auto"
+            value="<?php echo $this->value; ?>"
+            size="10"
+            autocomplete="off"  />
+        <?php
+        // Timezone hint
+        // Show timzone hit by default but allow field to turn it off.
+        $showtimezone = true;
+        if (isset($config['showtimezone']))
+            $showtimezone = $config['showtimezone'];
+
+        if ($showtimezone) {
+            echo sprintf('&nbsp;<span class="faded">(<a href="#"
+                        data-placement="top" data-toggle="tooltip"
+                        title="%s">%s</a>)</span>',
+                    $datetime->getTimezone()->getName(),
+                    $datetime->format('T'));
+        }
+        ?>
+        <script type="text/javascript">
+            $(function() {
+                $('input[name="<?php echo $this->name; ?>"]').timepicker({
+                    <?php
+                    // Set time options
+                    echo sprintf("
+                            controlType: 'select',\n
+                            timeInput: true,\n
+                            timeFormat: \"%s\",\n",
+                            "hh:mm tt");
+                    echo sprintf("timezone: %s\n",
+                            ($datetime->getOffset()/60));
+                    ?>
+                });
+            });
+        </script>
+        <?php
+    }
+
+    /**
+     * Function: getValue
+     */
+    function getValue() {
+        global $cfg;
+
+        if ($value = parent::getValue()) {
+            // TODO: Return ISO format.
+        }
+
+        return $value;
+    }
+}
 class SectionBreakWidget extends Widget {
     function render($options=array()) {
         ?><div class="form-header section-break"><h3><?php
@@ -4495,7 +4896,7 @@ class FileUploadWidget extends Widget {
         ),
     );
 
-    function render($options) {
+    function render($options=array()) {
         $config = $this->field->getConfiguration();
         $name = $this->field->getFormName();
         $id = substr(md5(spl_object_hash($this)), 10);
@@ -4557,7 +4958,7 @@ class FileUploadWidget extends Widget {
           allowedfiletypes: <?php echo JsonDataEncoder::encode(
             $mimetypes); ?>,
           maxfiles: <?php echo $config['max'] ?: 20; ?>,
-          maxfilesize: <?php echo $maxfilesize; ?>,
+          maxfilesize: <?php echo str_replace(',', '.', $maxfilesize); ?>,
           name: '<?php echo $name; ?>[]',
           files: <?php echo JsonDataEncoder::encode($files); ?>
         });});
@@ -4657,7 +5058,7 @@ class FreeTextField extends FormField {
 
     function to_config($config) {
         if ($config && isset($config['attachments']))
-            $keepers = $config['attachments'] = array_values($config['attachments']);
+            $keepers = $config['attachments'];
         $this->getAttachments()->keepOnlyFileIds($keepers);
 
         return $config;
@@ -4748,6 +5149,7 @@ class ColorPickerWidget extends Widget {
 class VisibilityConstraint {
     static $operators = array(
         'eq' => 1,
+        'neq' => 1,
     );
 
     const HIDDEN =      0x0001;
@@ -4766,34 +5168,37 @@ class VisibilityConstraint {
         if (!$this->constraint->constraints)
             return;
 
-        $func = 'recheck';
+        $func = 'recheck_'.$field->getWidget()->id;
         $form = $field->getForm();
 ?>
     <script type="text/javascript">
       !(function() {
         var <?php echo $func; ?> = function() {
           var target = $('#field<?php echo $field->getWidget()->id; ?>');
-
 <?php   $fields = $this->getAllFields($this->constraint);
         foreach ($fields as $f) {
-            $field = $form->getField($f);
-            echo sprintf('var %1$s = $("#%1$s");',
+            if (!($field = $form->getField($f)))
+                continue;
+            echo sprintf('var %1$s = x = $("#%1$s");',
                 $field->getWidget()->id);
         }
         $expression = $this->compileQ($this->constraint, $form);
 ?>
-          if (<?php echo $expression; ?>)
+          if (<?php echo $expression; ?>) {
             target.slideDown('fast', function (){
                 $(this).trigger('show');
                 });
-          else
+          } else {
             target.slideUp('fast', function (){
                 $(this).trigger('hide');
                 });
+          }
         };
 
 <?php   foreach ($fields as $f) {
-            $w = $form->getField($f)->getWidget();
+            if (!($field=$form->getField($f)))
+                continue;
+            $w = $field->getWidget();
 ?>
         $('#<?php echo $w->id; ?>').on('change', <?php echo $func; ?>);
         $('#field<?php echo $w->id; ?>').on('show hide', <?php
@@ -4838,10 +5243,14 @@ class VisibilityConstraint {
                 @list($f, $op) = self::splitFieldAndOp($c);
                 $field = $form->getField($f);
                 $wval = $field ? $field->getClean() : null;
+                $values = explode('|', $value);
                 switch ($op) {
+                case 'neq':
+                    $expr[] = ($wval && !in_array($wval, $values) && $field->isVisible());
+                    break;
                 case 'eq':
                 case null:
-                    $expr[] = ($wval == $value && $field->isVisible());
+                    $expr[] = (in_array($wval, $values) && $field->isVisible());
                 }
             }
         }
@@ -4876,17 +5285,18 @@ class VisibilityConstraint {
             }
             else {
                 list($f, $op) = self::splitFieldAndOp($c);
-                $widget = $form->getField($f)->getWidget();
+                if (!($field=$form->getField($f))) continue;
+                $widget = $field->getWidget();
                 $id = $widget->id;
                 switch ($op) {
+                case 'neq':
+                    $expr[] = sprintf('(%s.is(":visible") && !(%s))',
+                            $id, $widget->getJsComparator($value, $id));
+                    break;
                 case 'eq':
                 case null:
-                    $expr[] = sprintf('(%s.is(":visible") && %s)',
-                            $id,
-                            sprintf('%s == %s',
-                                sprintf($widget->getJsValueGetter(), $id),
-                                JsonDataEncoder::encode($value))
-                            );
+                    $expr[] = sprintf('(%s.is(":visible") && (%s))',
+                            $id, $widget->getJsComparator($value, $id));
                 }
             }
         }
@@ -4982,7 +5392,7 @@ class AssignmentForm extends Form {
         return !$this->errors();
     }
 
-    function render($options) {
+    function render($options=array()) {
 
         switch(strtolower($options['template'])) {
         case 'simple':
@@ -5269,7 +5679,7 @@ class ReferralForm extends Form {
         return !$this->errors();
     }
 
-    function render($options) {
+    function render($options=array()) {
 
         switch(strtolower($options['template'])) {
         case 'simple':
@@ -5377,7 +5787,7 @@ class TransferForm extends Form {
         return !$this->errors();
     }
 
-    function render($options) {
+    function render($options=array()) {
 
         switch(strtolower($options['template'])) {
         case 'simple':

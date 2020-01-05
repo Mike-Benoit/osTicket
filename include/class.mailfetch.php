@@ -29,6 +29,9 @@ class MailFetcher {
     var $mbox;
     var $srvstr;
 
+    var $authuser;
+    var $username;
+
     var $charset = 'UTF-8';
 
     var $tnef = false;
@@ -48,7 +51,17 @@ class MailFetcher {
 
         $this->charset = $charset;
 
-        if($this->ht) {
+        if ($this->ht) {
+            // Support Exchange shared mailbox auth
+            // (eg. user@domain.com\shared@domain.com)
+            $usernames = explode('\\', $this->ht['username'], 2);
+            if (count($usernames) == 2) {
+                $this->authuser = $usernames[0];
+                $this->username = $usernames[1];
+            } else {
+                $this->username = $this->ht['username'];
+            }
+
             if(!strcasecmp($this->ht['protocol'],'pop')) //force pop3
                 $this->ht['protocol'] = 'pop3';
             else
@@ -62,6 +75,9 @@ class MailFetcher {
             $this->srvstr=sprintf('{%s:%d/%s', $this->getHost(), $this->getPort(), $this->getProtocol());
             if(!strcasecmp($this->getEncryption(), 'SSL'))
                 $this->srvstr.='/ssl';
+
+            if ($this->authuser)
+                $this->srvstr .= sprintf('/authuser=%s', $this->authuser);
 
             $this->srvstr.='/novalidate-cert}';
 
@@ -93,7 +109,7 @@ class MailFetcher {
     }
 
     function getUsername() {
-        return $this->ht['username'];
+        return $this->username;
     }
 
     function getPassword() {
@@ -110,6 +126,10 @@ class MailFetcher {
         return $this->ht['max_fetch'];
     }
 
+    function getMailFolder() {
+        return $this->mailbox_encode($this->ht['folder'] ?: 'INBOX');
+    }
+
     function getArchiveFolder() {
         return $this->mailbox_encode($this->ht['archive_folder']);
     }
@@ -117,7 +137,7 @@ class MailFetcher {
     /* Core */
 
     function connect() {
-        return ($this->mbox && $this->ping())?$this->mbox:$this->open();
+        return ($this->mbox && $this->ping())?$this->mbox:$this->open($this->getMailFolder());
     }
 
     function ping() {
@@ -359,7 +379,9 @@ class MailFetcher {
                 }
             }
         }
-        $header['thread_entry_recipients']['to'] = array_unique($header['thread_entry_recipients']['to']);
+
+        if (isset($header['thread_entry_recipients']['to']))
+            $header['thread_entry_recipients']['to'] = array_unique($header['thread_entry_recipients']['to']);
 
         //See if any of the recipients is a delivered to address
         if ($tolist['delivered-to']) {
@@ -399,8 +421,17 @@ class MailFetcher {
         return $header;
     }
 
+    function fetchBody($mid, $index, $encoding) {
+        $body = imap_fetchbody($this->mbox, $mid, $index);
+        if ($body && $encoding)
+            $body = $this->decode($body, $encoding);
+
+        return $body;
+    }
+
     //search for specific mime type parts....encoding is the desired encoding.
-    function getPart($mid, $mimeType, $encoding=false, $struct=null, $partNumber=false, $recurse=-1, $recurseIntoRfc822=true) {
+    function getPart($mid, $mimeType, $encoding=false, $struct=null,
+        $partNumber=false, $recurse=-1, $recurseIntoRfc822=false) {
 
         if(!$struct && $mid)
             $struct=@imap_fetchstructure($this->mbox, $mid);
@@ -490,8 +521,9 @@ class MailFetcher {
 
      */
     function getAttachments($part, $index=0) {
-
-        if($part && !$part->parts) {
+        $ctype = $part ? $this->getMimeType($part) : false;
+        if($part && (!$part->parts
+              || strcasecmp($ctype, 'message/rfc822') === 0)) {
             //Check if the part is an attachment.
             $filename = false;
             if ($part->ifdisposition && $part->ifdparameters
@@ -515,6 +547,12 @@ class MailFetcher {
             if (!$filename && $content_id && $part->type == 5) {
                 $filename = _S('image').'-'.Misc::randCode(4).'.'.strtolower($part->subtype);
             }
+
+            // Attached message/rfc822 without filename.
+            if (!$filename
+                  && $ctype
+                  && strcasecmp($ctype, 'message/rfc822') === 0)
+                $filename = 'email-message-'.Misc::randCode(4).'.eml';
 
             if($filename) {
                 return array(
@@ -653,6 +691,18 @@ class MailFetcher {
         // attachment. Download the body and pass it along to the mail
         // parsing engine.
         $info = Mail_Parse::splitHeaders($mailinfo['header']);
+
+        //make sure reply-to headers are correctly formatted
+        if ($mailinfo['reply-to'] && !Validator::is_email($mailinfo['reply-to']) && $info['Reply-To']) {
+            $replyto = Mail_Parse::parseAddressList($info['Reply-To']);
+            if ($replyto[0]) {
+                $mailinfo['reply-to'] = sprintf('%s@%s', $replyto[0]->mailbox, $replyto[0]->host);
+                $mailinfo['reply-to-name'] = $replyto[0]->personal;
+            } else {
+              $mailinfo['reply-to'] = null;
+            }
+        }
+
         if (strtolower($info['Content-Type']) == 'message/rfc822') {
             if ($wrapped = $this->getPart($mid, 'message/rfc822')) {
                 require_once INCLUDE_DIR.'api.tickets.php';
@@ -673,11 +723,13 @@ class MailFetcher {
 	        return true; //Report success (moved or delete)
         }
 
-        // Parse MS TNEF emails
+        // Process overloaded attachments
         if (($struct = imap_fetchstructure($this->mbox, $mid))
                 && ($attachments = $this->getAttachments($struct))) {
             foreach ($attachments as $i=>$info) {
-                if (0 === strcasecmp('application/ms-tnef', $info['type'])) {
+                switch (strtolower($info['type'])) {
+                // Parse MS TNEF emails
+                case 'application/ms-tnef':
                     try {
                         $data = $this->decode(imap_fetchbody($this->mbox,
                             $mid, $info['index']), $info['encoding']);
@@ -690,6 +742,26 @@ class MailFetcher {
                     } catch (TnefException $ex) {
                         // Noop -- winmail.dat remains an attachment
                     }
+                    break;
+                // Parse attached email message
+                case 'message/rfc822':
+                    try {
+                        // Fetch the header of attached mime message.
+                        $body = $this->fetchBody($mid, $info['index'].'.0',
+                            $info['encoding']);
+                        // Add fake body to make the parser happy
+                        if (!$body)
+                             $body.="\n\nJunk";
+
+                        $parser = new Mail_Parse($body);
+                        if ($parser->decode()
+                              && ($subj = $parser->getSubject()))
+                            $attachments[$i]['name'] = $subj.'.eml';
+                    } catch(Exception $ex) {
+                        // Noop -- use random name
+                    }
+                    $body = $parser = null;
+                    break;
                 }
             }
         }
@@ -763,7 +835,7 @@ class MailFetcher {
                 else {
                     // only fetch the body if necessary
                     $self = $this;
-                    $file['data'] = function() use ($self, $mid, $a) {
+                    $file['data_cbk'] = function() use ($self, $mid, $a) {
                         return $self->decode(imap_fetchbody($self->mbox,
                             $mid, $a['index']), $a['encoding']);
                     };
@@ -777,7 +849,9 @@ class MailFetcher {
                         $file['id'] = $f->getId();
                 }
                 catch (FileUploadError $ex) {
-                    $file['error'] = $file['name'] . ': ' . $ex->getMessage();
+                    $name = $file['name'];
+                    $file = array();
+                    $file['error'] = Format::htmlchars($name) . ': ' . $ex->getMessage();
                 }
 
                 $vars['attachments'][] = $file;
@@ -948,7 +1022,8 @@ class MailFetcher {
                 db_query('UPDATE '.EMAIL_TABLE.' SET mail_errors=mail_errors+1, mail_lasterror=NOW() WHERE email_id='.db_input($emailId));
                 if (++$errors>=$MAXERRORS) {
                     //We've reached the MAX consecutive errors...will attempt logins at delayed intervals
-                    $msg="\n"._S('osTicket is having trouble fetching emails from the following mail account').": \n".
+                    // XXX: Translate me
+                    $msg="\nosTicket is having trouble fetching emails from the following mail account: \n".
                         "\n"._S('User').": ".$fetcher->getUsername().
                         "\n"._S('Host').": ".$fetcher->getHost().
                         "\n"._S('Error').": ".$fetcher->getLastError().
