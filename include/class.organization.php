@@ -16,6 +16,7 @@ require_once(INCLUDE_DIR . 'class.orm.php');
 require_once(INCLUDE_DIR . 'class.forms.php');
 require_once(INCLUDE_DIR . 'class.dynamic_forms.php');
 require_once(INCLUDE_DIR . 'class.user.php');
+require_once INCLUDE_DIR . 'class.search.php';
 
 class OrganizationModel extends VerySimpleModel {
     static $meta = array(
@@ -28,7 +29,14 @@ class OrganizationModel extends VerySimpleModel {
             'cdata' => array(
                 'constraint' => array('id' => 'OrganizationCdata.org_id'),
             ),
-        )
+            'entries' => array(
+                'constraint' => array(
+                    'id' => 'DynamicFormEntry.object_id',
+                    "'O'" => 'DynamicFormEntry.object_type',
+                ),
+                'list' => true,
+            ),
+        ),
     );
 
     const COLLAB_ALL_MEMBERS =      0x0001;
@@ -160,7 +168,7 @@ class OrganizationCdata extends VerySimpleModel {
 }
 
 class Organization extends OrganizationModel
-implements TemplateVariable {
+implements TemplateVariable, Searchable {
     var $_entries;
     var $_forms;
 
@@ -269,13 +277,16 @@ implements TemplateVariable {
     function getFilterData() {
         $vars = array();
         foreach ($this->getDynamicData() as $entry) {
+            $vars += $entry->getFilterData();
+
+            // Add special `name` field in Org form
             if ($entry->getDynamicForm()->get('type') != 'O')
                 continue;
-            $vars += $entry->getFilterData();
-            // Add special `name` field
-            $f = $entry->getField('name');
-            $vars['field.'.$f->get('id')] = $this->getName();
+
+            if ($f = $entry->getField('name'))
+                $vars['field.'.$f->get('id')] = $this->getName();
         }
+
         return $vars;
     }
 
@@ -341,22 +352,27 @@ implements TemplateVariable {
         return $base + $extra;
     }
 
-    function update($vars, &$errors) {
-
-        $valid = true;
-        $forms = $this->getForms($vars);
-        foreach ($forms as $entry) {
-            if (!$entry->isValid())
-                $valid = false;
-            if ($entry->getDynamicForm()->get('type') == 'O'
-                        && ($f = $entry->getField('name'))
-                        && $f->getClean()
-                        && ($o=Organization::lookup(array('name'=>$f->getClean())))
-                        && $o->id != $this->getId()) {
-                $valid = false;
-                $f->addError(__('Organization with the same name already exists'));
-            }
+    static function getSearchableFields() {
+        $base = array();
+        $uform = OrganizationForm::objects()->one();
+        $base = array();
+        foreach ($uform->getFields() as $F) {
+            $fname = $F->get('name') ?: ('field_'.$F->get('id'));
+            if (!$F->hasData() || $F->isPresentationOnly())
+                continue;
+            if (!$F->isStorable())
+                $base[$fname] = $F;
+            else
+                $base["cdata__{$fname}"] = $F;
         }
+        return $base;
+    }
+
+    static function supportsCustomData() {
+        return true;
+    }
+
+    function updateProfile($vars, &$errors) {
 
         if ($vars['domain']) {
             foreach (explode(',', $vars['domain']) as $d) {
@@ -380,20 +396,13 @@ implements TemplateVariable {
             }
         }
 
-        if (!$valid || $errors)
-            return false;
+        // Attempt to valid & update dynamic data even on errors
+        if (!$this->update($vars, $errors))
+            $errors['error'] = __('Unable to update organization form');
 
-        foreach ($this->getDynamicData() as $entry) {
-            if ($entry->getDynamicForm()->get('type') == 'O'
-               && ($name = $entry->getField('name'))
-            ) {
-                $this->name = $name->getClean();
-                $this->save();
-            }
-            $entry->setSource($vars);
-            if ($entry->save())
-                $this->updated = SqlFunction::NOW();
-        }
+
+        if ($errors)
+            return false;
 
         // Set flags
         foreach (array(
@@ -425,14 +434,60 @@ implements TemplateVariable {
                 $u->setPrimaryContact(array_search($u->id, $vars['contacts']) !== false);
                 $u->save();
             }
+        } else {
+            $members = $this->allMembers();
+            $members->update(array(
+                'status' => SqlExpression::bitand(
+                    new SqlField('status'), ~User::PRIMARY_ORG_CONTACT)
+                ));
         }
 
         return $this->save();
     }
 
+
+    function update($vars, &$errors) {
+
+        $valid = true;
+        $forms = $this->getForms($vars);
+        foreach ($forms as $entry) {
+            if (!$entry->isValid())
+                $valid = false;
+            if ($entry->getDynamicForm()->get('type') == 'O'
+                        && ($f = $entry->getField('name'))
+                        && $f->getClean()
+                        && ($o=Organization::lookup(array('name'=>$f->getClean())))
+                        && $o->id != $this->getId()) {
+                $valid = false;
+                $f->addError(__('Organization with the same name already exists'));
+            }
+        }
+
+        if (!$valid || $errors)
+            return false;
+
+        // Save dynamic data.
+        foreach ($this->getDynamicData() as $entry) {
+            if ($entry->getDynamicForm()->get('type') == 'O'
+               && ($name = $entry->getField('name'))
+            ) {
+                $this->name = $name->getClean();
+                $this->save();
+            }
+            $entry->setSource($vars);
+            if ($entry->save())
+                $this->updated = SqlFunction::NOW();
+        }
+
+        return true;
+    }
+
     function delete() {
         if (!parent::delete())
             return false;
+
+        // Clear organization from session to avoid refetch failure
+        unset($_SESSION[':Q:orgs'], $_SESSION[':O:tickets']);
 
         // Remove users from this organization
         User::objects()
@@ -444,6 +499,15 @@ implements TemplateVariable {
                 return false;
         }
         return true;
+    }
+
+    static function getLink($id) {
+        global $thisstaff;
+
+        if (!$id || !$thisstaff)
+            return false;
+
+        return ROOT_PATH . sprintf('scp/orgs.php?id=%s', $id);
     }
 
     static function fromVars($vars) {
