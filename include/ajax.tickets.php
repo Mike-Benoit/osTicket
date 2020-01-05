@@ -28,6 +28,7 @@ class TicketsAjaxAPI extends AjaxController {
 
         $limit = isset($_REQUEST['limit']) ? (int) $_REQUEST['limit']:25;
         $tickets=array();
+
         // Bail out of query is empty
         if (!$_REQUEST['q'])
             return $this->json_encode($tickets);
@@ -46,7 +47,8 @@ class TicketsAjaxAPI extends AjaxController {
             ->order_by(SqlAggregate::SUM(new SqlCode('Z1.relevance')), QuerySet::DESC)
             ->limit($limit);
 
-        $q = $_REQUEST['q'];
+        //trim() the query to avoid erroneous leading/trailing spaces from returning zero results, especially when copy&pasting ticket numbers.
+        $q = trim($_REQUEST['q']);
 
         if (strlen(Format::searchable($q)) < 3)
             return $this->encode(array());

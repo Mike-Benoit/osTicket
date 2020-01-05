@@ -84,20 +84,23 @@ if (!$ticket) {
     elseif (isset($_GET['a']) && $_GET['a'] === 'search'
         && ($_GET['query'])
     ) {
-        $wc = mb_str_wc($_GET['query']);
+		//trim() the query to avoid erroneous leading/trailing spaces from returning zero results, especially when copy&pasting ticket numbers.
+    	$query = trim($_GET['query']);
+        $wc = mb_str_wc($query);
         if ($wc < 4) {
-            $key = substr(md5($_GET['query']), -10);
+            $key = substr(md5($query), -10);
             if ($_GET['search-type'] == 'typeahead') {
                 // Use a faster index
-                $criteria = ['user__emails__address', 'equal', $_GET['query']];
+                $criteria = ['user__emails__address', 'equal', $query];
             } else {
-                $criteria = [':keywords', null, $_GET['query']];
+                $criteria = [':keywords', null, $query];
             }
             $_SESSION['advsearch'][$key] = [$criteria];
             $queue_id = "adhoc,{$key}";
         } else {
             $errors['err'] = __('Search term cannot have more than 3 keywords');
         }
+        unset($query);
     }
 
     $queue_key = sprintf('::Q:%s', ObjectModel::OBJECT_TYPE_TICKET);
