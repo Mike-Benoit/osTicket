@@ -68,6 +68,12 @@
       , left: pos.left
       })
 
+      //If the user navigated to a different page, or the element disappeared, the position will be top=0, left=0, height=0
+      // In which case we can skip showing it to the user as it won't make sense or be in the proper position anyways.
+      if ( pos.top == 0 && pos.height == 0 && pos.left == 0 ) {
+          return;
+      }
+
       this.$menu.show()
       this.shown = true
       return this
