@@ -71,13 +71,13 @@ class TicketsAjaxAPI extends AjaxController {
                 ->limit($limit)
                 ->union($hits);
         }
-		elseif (strpos($q,'@')) {
+		elseif ( strpos($q,'@') !== FALSE ) {
 			//If search query contains an '@', assume they are doing an email address search and prepend this specific UNION query to do an exact match search to show those results first.
 			//  Decided to execute this on just an '@' so the user can type "john@" (without quotes) and still get results that start with that, rather than require a complete email address to be entered first.
 			$hits = Ticket::objects()
 					->values( 'user__default_email__address', 'cdata__subject', 'user__name', 'ticket_id', 'thread__id', 'flags' )
 					->annotate( array(
-										'number' => new SqlCode('null'),
+										'number'        => new SqlCode('null'),
 										'tickets'       => new SqlCode( '1' ),
 										'tasks'         => SqlAggregate::COUNT( 'tasks__id', TRUE ),
 										'collaborators' => SqlAggregate::COUNT( 'thread__collaborators__id', TRUE ),
