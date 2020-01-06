@@ -178,7 +178,9 @@
         return i[0]
       })
 
-      items.first().addClass('active')
+      //Don't select the first item by default as race conditions can exist with the server returning results which cause unexpected behavior when the user hits enter right away.
+      //items.first().addClass('active')
+
       this.$menu.html(items)
       return this
     }
@@ -278,9 +280,17 @@
 
       switch(e.keyCode) {
         case 9: // tab
-        case 13: // enter
         case 27: // escape
           e.preventDefault()
+          break;
+
+          case 13: // enter
+          //If no active items are selected, bubble event back up so enter gets passed to the parent form element.
+          if ( this.$menu.find('.active').length > 0 ) {
+              e.preventDefault()
+          } else {
+              this.hide()
+          }
           break
 
         case 38: // up arrow
