@@ -89,10 +89,28 @@ class TicketsAjaxAPI extends AjaxController {
 					->limit( $limit )
 					->union( $hits );
 		}
-        elseif (!count($hits) && preg_match('`\w$`u', $q)) {
-            // Do wild-card fulltext search
-            $_REQUEST['q'] = $q.'*';
-            return $this->lookup();
+        else {
+            //Attempt to search by specific user full name (first/last name) and order that first.
+            $hits = Ticket::objects()
+                    ->values( 'user__default_email__address', 'cdata__subject', 'user__name', 'ticket_id', 'thread__id', 'flags' )
+                    ->annotate( array(
+                                        'number'        => new SqlCode('null'),
+                                        'tickets'       => new SqlCode( '1' ),
+                                        'tasks'         => SqlAggregate::COUNT( 'tasks__id', TRUE ),
+                                        'collaborators' => SqlAggregate::COUNT( 'thread__collaborators__id', TRUE ),
+                                        'entries'       => SqlAggregate::COUNT( 'thread__entries__id', TRUE ),
+                                ) )
+                    ->filter( $visibility )
+                    ->filter( array('user__name__startswith' => $q) )
+                    ->order_by( 'user__name' )
+                    ->limit( $limit )
+                    ->union( $hits );
+
+            if (!count($hits) && preg_match('`\w$`u', $q)) {
+                // Do wild-card fulltext search
+                $_REQUEST['q'] = $q.'*';
+                return $this->lookup();
+            }
         }
 
         foreach ($hits as $T) {
