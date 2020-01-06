@@ -119,7 +119,7 @@ class TicketsAjaxAPI extends AjaxController {
             if ($T['number']) {
                 $tickets[$T['number']] = array('id'=>$T['number'], 'value'=>$T['number'],
                     'ticket_id'=>$T['ticket_id'],
-                    'info'=>"{$T['number']} — {$email}",
+                    'info'=>"{$T['number']} — {$T['user__name']} <{$email}>",
                     'subject'=>$T['cdata__subject'],
                     'user'=>$T['user__name'],
                     'tasks'=>$T['tasks'],
@@ -132,7 +132,7 @@ class TicketsAjaxAPI extends AjaxController {
             }
             else {
                 $tickets[$email] = array('email'=>$email, 'value'=>$email,
-                    'info'=>"$email ($count)", 'matches'=>$_REQUEST['q']);
+                    'info'=>"{$T['user__name']} <{$email}> ({$count})", 'matches'=>$_REQUEST['q']);
             }
         }
         $tickets = array_values($tickets);
