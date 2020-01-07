@@ -366,6 +366,17 @@ var ticket_onload = function($) {
                 $('#msg-txt').text(obj.msg);
                 $('div#msg_notice').show();
             }
+            // If Help Topic was set and statuses are returned
+            if (obj.statuses) {
+                var el = $('select[name=reply_status_id]');
+                // Foreach status see if exists, if not appned to options
+                $.each(obj.statuses, function(key, value) {
+                    if (el.find('option[value='+key+']').length == 0)
+                        el.append($('<option></option>').attr('value', key).text(value));
+                });
+                // Hide warning banner
+                el.closest('td').find('.warning-banner').hide();
+            }
         }, $options);
 
         return false;
