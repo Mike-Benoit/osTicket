@@ -331,7 +331,7 @@ implements RestrictedAccess, Threadable, Searchable {
         } elseif (($num=$this->getNumOpenTasks())) {
             $warning = sprintf(__('%1$s has %2$d open tasks and cannot be closed'),
                     __('This ticket'), $num);
-        } elseif ($cfg->requireTopicToClose() && !$this->getTopicId()) {
+        } elseif ($cfg->requireTopicToClose() && !$this->getTopicId() && !$this->isChild()) {
             $warning = sprintf(
                     __( '%1$s is missing a %2$s and cannot be closed'),
                     __('This ticket'), __('Help Topic'), '');
