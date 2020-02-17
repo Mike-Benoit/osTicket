@@ -4395,6 +4395,14 @@ implements RestrictedAccess, Threadable, Searchable {
             $oldTask->postNote($taskNote, $errors, $thisstaff);
         }
 
+        if ( isset($vars['internal_note']) ) {
+            if ( is_array( $vars['internal_note'] ) && isset($vars['internal_note']['title']) && isset($vars['internal_note']['body']) ) {
+                $ticket->logNote( $vars['internal_note']['title'], $vars['internal_note']['body'], $thisstaff );
+            } elseif ( $vars['internal_note'] != '' ) {
+                $ticket->logNote( '', $vars['internal_note'], $thisstaff );
+            }
+        }
+
         // Configure service-level-agreement for this ticket
         $ticket->selectSLAId($vars['slaId']);
 
