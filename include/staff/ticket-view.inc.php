@@ -662,6 +662,7 @@ if($ticket->isOverdue())
 <br>
 <?php
 foreach (DynamicFormEntry::forTicket($ticket->getId()) as $form) {
+    $form->addMissingFields();
     //Find fields to exclude if disabled by help topic
     $disabled = Ticket::getMissingRequiredFields($ticket, true);
 
@@ -693,9 +694,9 @@ foreach (DynamicFormEntry::forTicket($ticket->getId()) as $form) {
         $id =  $a->getLocal('id');
         $label = $a->getLocal('label');
         $v = $a->display();
-        $class = $v ? '' : 'class="faded"';
-        $clean = $v ?: '&mdash;' . __('Empty') .  '&mdash;';
         $field = $a->getField();
+        $class = (Format::striptags($v)) ? '' : 'class="faded"';
+        $clean = (Format::striptags($v)) ? $v : '&mdash;' . __('Empty') .  '&mdash;';
         $isFile = ($field instanceof FileUploadField);
 ?>
         <tr>
@@ -707,7 +708,7 @@ foreach (DynamicFormEntry::forTicket($ticket->getId()) as $form) {
                     if ($isFile && !$isEmpty) {
                         echo sprintf('<span id="field_%s" %s >%s</span><br>', $id,
                             $class,
-                            $v ?: '<span class="faded">&mdash;' . __('Empty') .  '&mdash; </span>');
+                            $clean);
                     }
                          ?>
                   <a class="inline-edit" data-placement="bottom" data-toggle="tooltip" title="<?php echo __('Update'); ?>"
@@ -732,7 +733,7 @@ foreach (DynamicFormEntry::forTicket($ticket->getId()) as $form) {
               </a>
             <?php
             } else {
-                echo $v;
+                echo $clean;
             } ?>
             </td>
         </tr>

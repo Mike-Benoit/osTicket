@@ -803,11 +803,11 @@ implements RestrictedAccess, Threadable, Searchable {
 
     function getLastRespondent() {
         if (!isset($this->lastrespondent)) {
-            if (!$this->thread || !$this->thread->entries)
+            if (!$this->getThread() || !$this->getThread()->entries)
                 return $this->lastrespondent = false;
             $this->lastrespondent = Staff::objects()
                 ->filter(array(
-                'staff_id' => $this->thread->entries
+                'staff_id' => $this->getThread()->entries
                     ->filter(array(
                         'type' => 'R',
                         'staff_id__gt' => 0,
@@ -824,11 +824,11 @@ implements RestrictedAccess, Threadable, Searchable {
 
     function getLastUserRespondent() {
         if (!isset($this->$lastuserrespondent)) {
-            if (!$this->thread || !$this->thread->entries)
+            if (!$this->getThread() || !$this->getThread()->entries)
                 return $this->$lastuserrespondent = false;
             $this->$lastuserrespondent = User::objects()
                 ->filter(array(
-                'id' => $this->thread->entries
+                'id' => $this->getThread()->entries
                     ->filter(array(
                         'user_id__gt' => 0,
                     ))
@@ -843,7 +843,7 @@ implements RestrictedAccess, Threadable, Searchable {
     }
 
     function getLastMessageDate() {
-        return $this->thread->lastmessage;
+        return $this->getThread()->lastmessage;
     }
 
     function getLastMsgDate() {
@@ -851,7 +851,7 @@ implements RestrictedAccess, Threadable, Searchable {
     }
 
     function getLastResponseDate() {
-        return $this->thread->lastresponse;
+        return $this->getThread()->lastresponse;
     }
 
     function getLastRespDate() {
@@ -1089,7 +1089,7 @@ implements RestrictedAccess, Threadable, Searchable {
     function getField($fid) {
 
         if (is_numeric($fid))
-            return $this->getDymanicFieldById($fid);
+            return $this->getDynamicFieldById($fid);
 
         // Special fields
         switch ($fid) {
@@ -1147,7 +1147,7 @@ implements RestrictedAccess, Threadable, Searchable {
         }
     }
 
-    function getDymanicFieldById($fid) {
+    function getDynamicFieldById($fid) {
         foreach (DynamicFormEntry::forTicket($this->getId()) as $form) {
             foreach ($form->getFields() as $field)
                 if ($field->getId() == $fid)
@@ -1443,7 +1443,7 @@ implements RestrictedAccess, Threadable, Searchable {
     }
 
     // Ticket Status helper.
-    function setStatus($status, $comments='', &$errors=array(), $set_closing_agent=true) {
+    function setStatus($status, $comments='', &$errors=array(), $set_closing_agent=true, $force_close=false) {
         global $cfg, $thisstaff;
 
         if ($thisstaff && !($role=$this->getRole($thisstaff)))
@@ -1479,7 +1479,7 @@ implements RestrictedAccess, Threadable, Searchable {
         switch ($status->getState()) {
             case 'closed':
                 // Check if ticket is closeable
-                $closeable = $this->isCloseable();
+                $closeable = $force_close ? true : $this->isCloseable();
                 if ($closeable !== true)
                     $errors['err'] = $closeable ?: sprintf(__('%s cannot be closed'), __('This ticket'));
 
@@ -1525,7 +1525,7 @@ implements RestrictedAccess, Threadable, Searchable {
                     $ecb = function ($t) {
                         $t->logEvent('reopened', false, null, 'closed');
                         // Set new sla duedate if any
-                        $t->updateEstDuedate();
+                        $t->updateEstDueDate();
                     };
                 }
 
@@ -1544,7 +1544,7 @@ implements RestrictedAccess, Threadable, Searchable {
 
         // Refer thread to previously assigned or closing agent
         if ($refer && $cfg->autoReferTicketsOnClose())
-            $this->thread->refer($refer);
+            $this->getThread()->refer($refer);
 
         // Log status change b4 reload — if currently has a status. (On new
         // ticket, the ticket is opened and thereafter the status is set to
@@ -2505,7 +2505,7 @@ implements RestrictedAccess, Threadable, Searchable {
                                //referrals for merged tickets
                                if ($parent->getDeptId() != ($ticketDeptId = $ticket->getDeptId()) && $tickets['combine'] != 2) {
                                    $refDept = $ticket->getDept();
-                                   $parent->thread->refer($refDept);
+                                   $parent->getThread()->refer($refDept);
                                    $evd = array('dept' => $ticketDeptId);
                                    $parent->logEvent('referred', $evd);
                                }
@@ -2536,7 +2536,7 @@ implements RestrictedAccess, Threadable, Searchable {
                 $children[] = $ticket;
         }
 
-        if ($parent->getMergeType() != 'visual') {
+        if ($parent && $parent->getMergeType() != 'visual') {
             $errors = array();
             foreach ($children as $child) {
                 if ($options['participants'] == 'all' && $collabs = $child->getCollaborators()) {
@@ -2559,7 +2559,10 @@ implements RestrictedAccess, Threadable, Searchable {
                     $child->getThread()->setExtra($parentThread);
 
                 $child->setMergeType($options['combine']);
-                $child->setStatus(intval($options['statusId']));
+                $child->setStatus(intval($options['childStatusId']), false, $errors, true, true); //force close status for children
+
+                if ($options['parentStatusId'])
+                    $parent->setStatus(intval($options['parentStatusId']));
 
                 if ($options['delete-child'] || $options['move-tasks']) {
                     if ($tasks = Task::objects()
@@ -2576,8 +2579,9 @@ implements RestrictedAccess, Threadable, Searchable {
                 if ($options['delete-child'])
                      $child->delete();
             }
+            return $parent;
         }
-        return $parent;
+        return false;
     }
 
     function getRelatedTickets() {
@@ -2595,6 +2599,13 @@ implements RestrictedAccess, Threadable, Searchable {
         </tr>',
         strtolower($this->getSource()), $this->getId(), $this->getId(), $this->getNumber(), $this->getSubject(),
             $this->getDeptName(), $this->getAssignee(), Format::datetime($this->getCreateDate()));
+    }
+
+    function hasReferral($object, $type) {
+        if (($referral=$this->thread->getReferral($object->getId(), $type)))
+            return $referral;
+
+        return false;
     }
 
     //Dept Transfer...with alert.. done by staff
@@ -2641,6 +2652,9 @@ implements RestrictedAccess, Threadable, Searchable {
         // Log transfer event
         $this->logEvent('transferred', array('dept' => $dept->getName()));
 
+        if (($referral=$this->hasReferral($dept,ObjectModel::OBJECT_TYPE_DEPT)))
+            $referral->delete();
+
         // Post internal note if any
         $note = null;
         $comments = $form->getField('comments')->getClean();
@@ -2657,7 +2671,7 @@ implements RestrictedAccess, Threadable, Searchable {
         }
 
         if ($form->refer() && $cdept)
-            $this->thread->refer($cdept);
+            $this->getThread()->refer($cdept);
 
 	$signal_info = array('dept' => $dept);
 	Signal::send('ticket.transfer', $this, $signal_info );
@@ -2762,6 +2776,9 @@ implements RestrictedAccess, Threadable, Searchable {
         $type = array('type' => 'assigned', $key => true);
         Signal::send('object.edited', $this, $type);
 
+        if (($referral=$this->hasReferral($staff,ObjectModel::OBJECT_TYPE_STAFF)))
+            $referral->delete();
+
 	$signal_info = array('agent' => $staff);
 	Signal::send('ticket.assign', $this, $signal_info );
 
@@ -2783,6 +2800,9 @@ implements RestrictedAccess, Threadable, Searchable {
 
         $this->onAssign($team, $note, $alert);
         $this->logEvent('assigned', array('team' => $team->getId()), $user);
+
+        if (($referral=$this->hasReferral($team,ObjectModel::OBJECT_TYPE_TEAM)))
+            $referral->delete();
 
         return true;
     }
@@ -2816,6 +2836,9 @@ implements RestrictedAccess, Threadable, Searchable {
                     $evd['staff'] = array($assignee->getId(), (string) $assignee->getName()->getOriginal());
                     $audit = array('staff' => $assignee->getName()->name);
                 }
+
+                if (($referral=$this->hasReferral($assignee,ObjectModel::OBJECT_TYPE_STAFF)))
+                    $referral->delete();
             }
         } elseif ($assignee instanceof Team) {
             if ($this->getTeamId() == $assignee->getId()) {
@@ -2830,6 +2853,8 @@ implements RestrictedAccess, Threadable, Searchable {
                 $this->team_id = $assignee->getId();
                 $evd = array('team' => $assignee->getId());
                 $audit = array('team' => $assignee->getName());
+                if (($referral=$this->hasReferral($assignee,ObjectModel::OBJECT_TYPE_TEAM)))
+                    $referral->delete();
             }
         } else {
             $errors['assignee'] = __('Unknown assignee');
@@ -2847,7 +2872,7 @@ implements RestrictedAccess, Threadable, Searchable {
         $this->onAssign($assignee, $form->getComments(), $alert);
 
         if ($refer && $form->refer())
-            $this->thread->refer($refer);
+            $this->getThread()->refer($refer);
 
 	$signal_info = array('staff' => $assignee);
 	Signal::send('ticket.assign', $this, $signal_info );
@@ -2937,7 +2962,7 @@ implements RestrictedAccess, Threadable, Searchable {
             $errors['target'] = __('Unknown referral');
         }
 
-        if (!$errors && !$this->thread->refer($referee))
+        if (!$errors && !$this->getThread()->refer($referee))
             $errors['err'] = __('Unable to refer ticket');
 
         if ($errors)
@@ -2954,7 +2979,7 @@ implements RestrictedAccess, Threadable, Searchable {
 
     function systemReferral($emails) {
 
-        if (!$this->thread)
+        if (!$this->getThread())
             return;
 
         foreach ($emails as $id) {
@@ -2962,7 +2987,7 @@ implements RestrictedAccess, Threadable, Searchable {
                     && ($email=Email::lookup($id))
                     && $this->getDeptId() != $email->getDeptId()
                     && ($dept=Dept::lookup($email->getDeptId()))
-                    && $this->thread->refer($dept)
+                    && $this->getThread()->refer($dept)
                     )
                 $this->logEvent('referred',
                             array('dept' => $dept->getId()));
