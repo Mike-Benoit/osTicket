@@ -1467,7 +1467,8 @@ class TextboxField extends FormField {
                 __('Enter a valid phone number')),
             'ip' =>     array(array('Validator', 'is_ip'),
                 __('Enter a valid IP address')),
-            'number' => array('is_numeric', __('Enter a number')),
+            'number' => array(array('Validator', 'is_numeric'),
+                __('Enter a number')),
             'password' => array(array('Validator', 'check_passwd'),
                 __('Invalid Password')),
             'regex' => array(
@@ -1489,8 +1490,7 @@ class TextboxField extends FormField {
         if (!$valid && !($this->getForm() instanceof AdvancedSearchForm))
             $valid = 'formula';
         $func = $validators[$valid];
-        $error = $func[1];
-        $err = null;
+        $error = $err = null;
         // If validator is number and the value is &#48 set to 0 (int) for is_numeric
         if ($valid == 'number' && $value == '&#48')
             $value = 0;
@@ -1498,11 +1498,11 @@ class TextboxField extends FormField {
             $error = $this->getLocal('validator-error', $config['validator-error']);
         if (is_array($func) && is_callable($func[0]))
             if (!call_user_func_array($func[0], array($value, &$err)))
-                $this->_errors[] = $err ?: $error;
+                $this->_errors[] =  $error ?: $err ?: $func[1];
     }
 
     function parse($value) {
-        return Format::striptags($value);
+        return Format::strip_emoticons(Format::striptags($value));
     }
 
     function display($value) {
@@ -2080,6 +2080,28 @@ class NumericField extends FormField {
                         ),
             )),
         );
+    }
+
+    function getSearchQ($method, $value, $name=false) {
+        switch ($method) {
+        case 'equal':
+            return new Q(array(
+                "{$name}__exact" => intval($value)
+            ));
+        break;
+        case 'greater':
+            return Q::any(array(
+                "{$name}__gt" => intval($value)
+            ));
+        break;
+        case 'less':
+            return Q::any(array(
+                "{$name}__lt" => intval($value)
+            ));
+        break;
+        default:
+            return parent::getSearchQ($method, $value, $name);
+        }
     }
 }
 
@@ -2712,7 +2734,7 @@ class ThreadEntryField extends FormField {
 
     function getWidget($widgetClass=false) {
         if ($hint = $this->getLocal('hint'))
-            $this->set('placeholder', $hint);
+            $this->set('placeholder', Format::striptags($hint));
         $this->set('hint', null);
         $widget = parent::getWidget($widgetClass);
         return $widget;
@@ -4234,7 +4256,7 @@ class TextareaWidget extends Widget {
         <span style="display:inline-block;width:100%">
         <textarea <?php echo $rows." ".$cols." ".$maxlength." ".$class
                 .' '.Format::array_implode('=', ' ', $attrs)
-                .' placeholder="'.$config['placeholder'].'"'; ?>
+                .' placeholder="'.$this->field->getLocal('placeholder', $config['placeholder']).'"'; ?>
             id="<?php echo $this->id; ?>"
             name="<?php echo $this->name; ?>"><?php
                 echo Format::htmlchars($this->value);
@@ -4628,7 +4650,7 @@ class CheckboxWidget extends Widget {
 
     function getValue() {
         $data = $this->field->getSource();
-        if (count($data)) {
+        if (is_array($data)) {
             if (isset($data[$this->name]))
                 return @in_array($this->field->get('id'),
                         $data[$this->name]);
@@ -4864,7 +4886,7 @@ class ThreadEntryWidget extends Widget {
             class="<?php if ($config['html']) echo 'richtext';
                 ?> draft draft-delete" <?php echo $attrs; ?>
             cols="21" rows="8" style="width:80%;"><?php echo
-            Format::htmlchars($this->value) ?: $draft; ?></textarea>
+            ThreadEntryBody::clean($this->value ?: $draft); ?></textarea>
     <?php
         if (!$config['attachments'])
             return;
@@ -5118,7 +5140,7 @@ class FreeTextWidget extends Widget {
         }
         if ($hint = $this->field->getLocal('hint')) { ?>
         <em><?php
-            echo Format::htmlchars($hint);
+            echo Format::display($hint);
         ?></em><?php
         } ?>
         <div><?php
